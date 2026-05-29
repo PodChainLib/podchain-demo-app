@@ -1,0 +1,39 @@
+name: podchain_demo_app
+description: >
+  PODCHAIN demonstration mobile application.
+  Simulates the delivery agent's experience for protocol evaluation purposes.
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # The podchain_flutter library — the deliverable under evaluation
+  podchain_flutter:
+    path: ../podchain_flutter
+
+  # HTTP client for API communication
+  http: ^1.1.0
+
+  # Location access for GPS coordinates at signing time
+  geolocator: ^10.1.0
+
+  # QR code scanner for Tier 2 QR display variant
+  mobile_scanner: ^3.5.6
+
+  # State management
+  provider: ^6.1.1
+
+  cupertino_icons: ^1.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
