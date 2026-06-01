@@ -10,7 +10,6 @@
 // (or offline queuing) all occur via the podchain_flutter library.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -19,7 +18,15 @@ import 'package:podchain_flutter/podchain_flutter.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 
-enum _DeliveryState { idle, locating, signing, submitting, success, failed, offline }
+enum _DeliveryState {
+  idle,
+  locating,
+  signing,
+  submitting,
+  success,
+  failed,
+  offline
+}
 
 class DeliveryScreen extends StatefulWidget {
   final Map<String, dynamic> task;
@@ -33,10 +40,12 @@ class DeliveryScreen extends StatefulWidget {
 class _DeliveryScreenState extends State<DeliveryScreen> {
   _DeliveryState _state = _DeliveryState.idle;
   String? _recipientProof;
+  String? _demoOtp;
   String? _errorMessage;
   String? _proofId;
   String? _chainHash;
   bool _offlineQueued = false;
+  String? _otpValidationMessage;
 
   final _otpController = TextEditingController();
   bool _showQrScanner = false;
@@ -45,7 +54,17 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
   String get _taskId => widget.task['taskId'] as String;
 
   @override
+  void initState() {
+    super.initState();
+    _otpController.addListener(_onOtpChanged);
+    if (_tier == 2) {
+      _loadTier2DemoOtp();
+    }
+  }
+
+  @override
   void dispose() {
+    _otpController.removeListener(_onOtpChanged);
     _otpController.dispose();
     super.dispose();
   }
@@ -69,13 +88,61 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
   Future<void> _collectTier1Token() async {
     final apiService = context.read<ApiService>();
     final tokenData = await apiService.getTaskToken(_taskId);
-    setState(() { _recipientProof = tokenData['token'] as String?; });
+    setState(() {
+      _recipientProof = tokenData['token'] as String?;
+    });
   }
 
   void _submitOtp() {
     final code = _otpController.text.trim();
     if (code.length == 6 && RegExp(r'^\d{6}$').hasMatch(code)) {
-      setState(() { _recipientProof = code; });
+      setState(() {
+        _recipientProof = code;
+        _otpValidationMessage = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _recipientProof = null;
+      _otpValidationMessage = 'Enter a valid 6-digit code.';
+    });
+  }
+
+  void _onOtpChanged() {
+    if (_tier != 2) return;
+
+    final code = _otpController.text.trim();
+    final isValid = code.length == 6 && RegExp(r'^\d{6}$').hasMatch(code);
+    final nextProof = isValid ? code : null;
+    final nextMessage =
+        code.isEmpty || isValid ? null : 'Code must be exactly 6 digits.';
+
+    if (nextProof == _recipientProof && nextMessage == _otpValidationMessage) {
+      return;
+    }
+
+    setState(() {
+      _recipientProof = nextProof;
+      _otpValidationMessage = nextMessage;
+    });
+  }
+
+  Future<void> _loadTier2DemoOtp() async {
+    try {
+      final apiService = context.read<ApiService>();
+      final tokenData = await apiService.getTaskToken(_taskId);
+      final otp = tokenData['otp'] as String?;
+      if (!mounted || otp == null || otp.isEmpty) return;
+
+      setState(() {
+        _demoOtp = otp;
+        if (_otpController.text.isEmpty) {
+          _otpController.text = otp;
+        }
+      });
+    } catch (_) {
+      // Demo hint fetch is best-effort only.
     }
   }
 
@@ -88,7 +155,9 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
       await Future.delayed(const Duration(seconds: 3));
       final tokenData = await apiService.getTaskToken(_taskId);
       if (tokenData['status'] == 'confirmed') {
-        setState(() { _recipientProof = tokenData['confirmationJson'] as String?; });
+        setState(() {
+          _recipientProof = tokenData['confirmationJson'] as String?;
+        });
         return;
       }
     }
@@ -104,7 +173,10 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
   Future<void> _signAndSubmit() async {
     if (_recipientProof == null) return;
 
-    setState(() { _state = _DeliveryState.locating; _errorMessage = null; });
+    setState(() {
+      _state = _DeliveryState.locating;
+      _errorMessage = null;
+    });
 
     // Get GPS coordinates
     DeliveryCoordinates coordinates;
@@ -127,14 +199,18 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
       coordinates = const DeliveryCoordinates(latitude: 0.0, longitude: 0.0);
     }
 
-    setState(() { _state = _DeliveryState.signing; });
+    setState(() {
+      _state = _DeliveryState.signing;
+    });
 
     final podchain = context.read<AppState>().podchain!;
     final apiService = context.read<ApiService>();
 
     try {
       // Attempt online submission first
-      setState(() { _state = _DeliveryState.submitting; });
+      setState(() {
+        _state = _DeliveryState.submitting;
+      });
 
       final proof = await podchain.signDelivery(
         taskId: _taskId,
@@ -155,7 +231,7 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
 
       throw Exception('Server rejected the proof');
     } on ApiException catch (e) {
-      if (e.code == 'NETWORK_ERROR' || e.code == 'UNKNOWN') {
+      if (_isNetworkError(e)) {
         // Go offline — sign and queue
         await _signAndQueue(coordinates);
       } else {
@@ -164,10 +240,22 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
           _errorMessage = '${e.code}: ${e.message}';
         });
       }
-    } catch (_) {
-      // Any other error — queue for offline submission
-      await _signAndQueue(coordinates);
+    } on PodChainFlutterError catch (e) {
+      setState(() {
+        _state = _DeliveryState.failed;
+        _errorMessage = '${e.code}: ${e.message}';
+      });
+    } catch (e) {
+      setState(() {
+        _state = _DeliveryState.failed;
+        _errorMessage = 'Unexpected error: $e';
+      });
     }
+  }
+
+  bool _isNetworkError(ApiException error) {
+    return error.code == 'NETWORK_ERROR' ||
+        error.message.toLowerCase().contains('unable to reach');
   }
 
   Future<void> _signAndQueue(DeliveryCoordinates coordinates) async {
@@ -198,12 +286,13 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Confirm Delivery'),
-        leading: _state == _DeliveryState.success || _state == _DeliveryState.offline
-            ? null
-            : IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
+        leading:
+            _state == _DeliveryState.success || _state == _DeliveryState.offline
+                ? null
+                : IconButton(
+                    icon: const Icon(Icons.arrow_back),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
       ),
       body: SafeArea(
         child: Padding(
@@ -224,8 +313,10 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
 
   Widget _buildTaskSummary() {
     final tier = _tier;
-    final tierLabel = ['', 'Passive Token', 'OTP Confirmation', 'Two-Sided Signing'][tier];
-    final tierColor = [Colors.grey, Colors.blue, Colors.orange, Colors.green][tier];
+    final tierLabel =
+        ['', 'Passive Token', 'OTP Confirmation', 'Two-Sided Signing'][tier];
+    final tierColor =
+        [Colors.grey, Colors.blue, Colors.orange, Colors.green][tier];
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -242,7 +333,8 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
               Expanded(
                 child: Text(
                   widget.task['recipientName'] as String? ?? 'Recipient',
-                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w700, fontSize: 16),
                 ),
               ),
               Container(
@@ -253,7 +345,10 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
                 ),
                 child: Text(
                   tierLabel,
-                  style: TextStyle(color: tierColor, fontSize: 11, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                      color: tierColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600),
                 ),
               ),
             ],
@@ -371,7 +466,8 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
               icon: const Icon(Icons.qr_code_scanner, size: 18),
               label: const Text('Scan QR'),
               style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
               ),
             ),
           ],
@@ -387,11 +483,51 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
             ),
             child: Row(
               children: [
-                const Icon(Icons.check_circle, color: Color(0xFF065F46), size: 16),
+                const Icon(Icons.check_circle,
+                    color: Color(0xFF065F46), size: 16),
                 const SizedBox(width: 8),
                 Text(
                   'Code accepted — ready to sign',
-                  style: const TextStyle(color: Color(0xFF065F46), fontSize: 13),
+                  style:
+                      const TextStyle(color: Color(0xFF065F46), fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (_otpValidationMessage != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _otpValidationMessage!,
+            style: const TextStyle(color: Color(0xFF991B1B), fontSize: 12),
+          ),
+        ],
+        if (_demoOtp != null) ...[
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEEF2FF),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline,
+                    color: Color(0xFF3730A3), size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Demo OTP: $_demoOtp',
+                    style:
+                        const TextStyle(color: Color(0xFF3730A3), fontSize: 13),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    _otpController.text = _demoOtp!;
+                    _submitOtp();
+                  },
+                  child: const Text('Use'),
                 ),
               ],
             ),
@@ -416,9 +552,13 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
         if (_recipientProof == null) ...[
           OutlinedButton.icon(
             onPressed: () async {
-              setState(() { _state = _DeliveryState.locating; });
+              setState(() {
+                _state = _DeliveryState.locating;
+              });
               await _pollForTier3Confirmation();
-              setState(() { _state = _DeliveryState.idle; });
+              setState(() {
+                _state = _DeliveryState.idle;
+              });
             },
             icon: const Icon(Icons.refresh, size: 18),
             label: const Text('Check confirmation status'),
@@ -578,7 +718,10 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
         ],
         const SizedBox(height: 24),
         FilledButton(
-          onPressed: () => setState(() { _state = _DeliveryState.idle; _errorMessage = null; }),
+          onPressed: () => setState(() {
+            _state = _DeliveryState.idle;
+            _errorMessage = null;
+          }),
           child: const Text('Try Again'),
         ),
       ],
@@ -635,7 +778,11 @@ class _StepLabel extends StatelessWidget {
             shape: BoxShape.circle,
           ),
           child: Center(
-            child: Text(step, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+            child: Text(step,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold)),
           ),
         ),
         const SizedBox(width: 8),
@@ -662,7 +809,11 @@ class _HashDisplay extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.w600)),
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 11,
+                  color: Colors.grey,
+                  fontWeight: FontWeight.w600)),
           const SizedBox(height: 4),
           Text(
             value,

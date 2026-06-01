@@ -1,0 +1,41 @@
+{
+  "object" : {
+    "artifacts" : [
+
+    ],
+    "dependencies" : [
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "flutterframework",
+          "kind" : "fileSystem",
+          "location" : "/Users/colman/arena/podchain/podchain-demo-app/ios/Flutter/ephemeral/Packages/.packages/FlutterFramework",
+          "name" : "FlutterFramework"
+        },
+        "state" : {
+          "name" : "fileSystem",
+          "path" : "/Users/colman/arena/podchain/podchain-demo-app/ios/Flutter/ephemeral/Packages/.packages/FlutterFramework"
+        },
+        "subpath" : "flutterframework"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "geolocator_apple-2.3.13",
+          "kind" : "fileSystem",
+          "location" : "/Users/colman/arena/podchain/podchain-demo-app/ios/Flutter/ephemeral/Packages/.packages/geolocator_apple-2.3.13",
+          "name" : "geolocator_apple"
+        },
+        "state" : {
+          "name" : "fileSystem",
+          "path" : "/Users/colman/arena/podchain/podchain-demo-app/ios/Flutter/ephemeral/Packages/.packages/geolocator_apple-2.3.13"
+        },
+        "subpath" : "geolocator_apple-2.3.13"
+      }
+    ],
+    "prebuilts" : [
+
+    ]
+  },
+  "version" : 7
+}

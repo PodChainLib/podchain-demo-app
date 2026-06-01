@@ -10,7 +10,8 @@ import 'services/api_service.dart';
 import 'screens/login_screen.dart';
 
 // In the demo, the API runs locally. Update this for remote testing.
-const _kBaseUrl = 'http://10.0.2.2:3000'; // Android emulator → host localhost
+// const _kBaseUrl = 'http://10.0.2.2:3000'; // Android emulator → host localhost
+const _kBaseUrl = 'http://127.0.0.1:3000'; // iOS emulator → host localhost
 
 void main() {
   runApp(const PodChainDemoApp());
@@ -77,11 +78,14 @@ class AppState extends ChangeNotifier {
       onSubmit: _apiService.submitProof,
     );
 
-    // On first login for this rider, generate key and register with platform.
-    final hasKey = await _podchain!.hasKey();
-    if (!hasKey) {
-      final publicKey = await _podchain!.generateOrRetrievePublicKey();
+    // Ensure rider key is registered on the backend for every login.
+    // This handles the case where the device already has a key but the API DB
+    // was reset and no longer has the rider registration.
+    final publicKey = await _podchain!.generateOrRetrievePublicKey();
+    try {
       await _apiService.registerKey(riderId: riderId, publicKey: publicKey);
+    } on ApiException catch (e) {
+      if (e.code != 'RIDER_ALREADY_EXISTS') rethrow;
     }
 
     notifyListeners();

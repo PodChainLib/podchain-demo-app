@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import 'delivery_screen.dart';
+import 'login_screen.dart';
 
 class TaskListScreen extends StatefulWidget {
   const TaskListScreen({super.key});
@@ -28,19 +29,31 @@ class _TaskListScreenState extends State<TaskListScreen> {
   }
 
   Future<void> _loadTasks() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
 
     try {
       final riderId = context.read<AppState>().riderId!;
       final apiService = context.read<ApiService>();
       final tasks = await apiService.getTasks(riderId);
-      setState(() { _tasks = tasks; });
+      setState(() {
+        _tasks = tasks;
+      });
     } on ApiException catch (e) {
-      setState(() { _error = e.message; });
+      setState(() {
+        _error = e.message;
+      });
     } catch (e) {
-      setState(() { _error = e.toString(); });
+      setState(() {
+        _error = e.toString();
+      });
     } finally {
-      if (mounted) setState(() { _loading = false; });
+      if (mounted)
+        setState(() {
+          _loading = false;
+        });
     }
   }
 
@@ -53,7 +66,8 @@ class _TaskListScreenState extends State<TaskListScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('My Deliveries', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            const Text('My Deliveries',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
             Text(
               appState.riderId ?? '',
               style: const TextStyle(fontSize: 11, color: Colors.white70),
@@ -70,7 +84,10 @@ class _TaskListScreenState extends State<TaskListScreen> {
             icon: const Icon(Icons.logout),
             onPressed: () {
               appState.logout();
-              Navigator.of(context).popUntil((r) => r.isFirst);
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (route) => false,
+              );
             },
             tooltip: 'Sign out',
           ),
@@ -94,7 +111,9 @@ class _TaskListScreenState extends State<TaskListScreen> {
             children: [
               const Icon(Icons.wifi_off, size: 48, color: Colors.grey),
               const SizedBox(height: 16),
-              Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.grey)),
+              Text(_error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.grey)),
               const SizedBox(height: 16),
               FilledButton(onPressed: _loadTasks, child: const Text('Retry')),
             ],
@@ -151,7 +170,8 @@ class _TaskCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final tier = task['tier'] as int? ?? 1;
     final tierLabel = ['', 'Passive', 'OTP', '2-Sided'][tier];
-    final tierColor = [Colors.grey, Colors.blue, Colors.orange, Colors.green][tier];
+    final tierColor =
+        [Colors.grey, Colors.blue, Colors.orange, Colors.green][tier];
 
     return GestureDetector(
       onTap: onTap,
@@ -161,7 +181,10 @@ class _TaskCard extends StatelessWidget {
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 2)),
+            BoxShadow(
+                color: Colors.black.withOpacity(0.05),
+                blurRadius: 8,
+                offset: const Offset(0, 2)),
           ],
         ),
         child: Column(
@@ -172,11 +195,13 @@ class _TaskCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     task['recipientName'] as String? ?? 'Recipient',
-                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w700, fontSize: 15),
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: tierColor.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(6),
@@ -195,7 +220,8 @@ class _TaskCard extends StatelessWidget {
             const SizedBox(height: 8),
             Row(
               children: [
-                const Icon(Icons.location_on_outlined, size: 14, color: Colors.grey),
+                const Icon(Icons.location_on_outlined,
+                    size: 14, color: Colors.grey),
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
@@ -224,11 +250,16 @@ class _TaskCard extends StatelessWidget {
               children: [
                 Text(
                   'Task: ${(task['taskId'] as String? ?? '').substring(0, 8)}…',
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.grey),
+                  style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: Colors.grey),
                 ),
                 const Row(
                   children: [
-                    Text('Deliver', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    Text('Deliver',
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600)),
                     SizedBox(width: 4),
                     Icon(Icons.arrow_forward, size: 14),
                   ],

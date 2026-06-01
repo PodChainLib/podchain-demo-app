@@ -26,6 +26,14 @@ class ApiService {
     _checkResponse(res, 'registerKey');
   }
 
+  Future<List<String>> getRegisteredRiders() async {
+    final res = await http.get(Uri.parse('$baseUrl/demo/riders'));
+    _checkResponse(res, 'getRegisteredRiders');
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final riders = body['registeredRiders'] as List<dynamic>? ?? const [];
+    return riders.map((r) => r.toString()).toList();
+  }
+
   // ── Task Management ─────────────────────────────────────────────────────────
 
   Future<List<Map<String, dynamic>>> getTasks(String riderId) async {
@@ -67,7 +75,7 @@ class ApiService {
       throw ApiException(error, body['message'] as String? ?? 'Unknown error');
     } catch (e) {
       if (e is ApiException) rethrow;
-      return false;
+      throw const ApiException('NETWORK_ERROR', 'Unable to reach the demo API');
     }
   }
 

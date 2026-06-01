@@ -11,13 +11,12 @@ import '../main.dart';
 import '../services/api_service.dart';
 import 'task_list_screen.dart';
 
-// Demo riders — simulating a small platform's delivery agent workforce
-const _kDemoRiders = [
-  {'id': 'rider_emeka_001', 'name': 'Emeka Okafor', 'zone': 'Lagos Island'},
-  {'id': 'rider_fatima_002', 'name': 'Fatima Bello', 'zone': 'Victoria Island'},
-  {'id': 'rider_chidi_003', 'name': 'Chidi Eze', 'zone': 'Lekki Phase 1'},
-  {'id': 'rider_aisha_004', 'name': 'Aisha Mohammed', 'zone': 'Ikeja'},
-];
+const _kRiderProfiles = <String, Map<String, String>>{
+  'rider_emeka_001': {'name': 'Emeka Okafor', 'zone': 'Lagos Island'},
+  'rider_fatima_002': {'name': 'Fatima Bello', 'zone': 'Victoria Island'},
+  'rider_chidi_003': {'name': 'Chidi Eze', 'zone': 'Lekki Phase 1'},
+  'rider_aisha_004': {'name': 'Aisha Mohammed', 'zone': 'Ikeja'},
+};
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -28,13 +27,60 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   String? _selectedRiderId;
+  List<String> _registeredRiders = [];
+  bool _loadingRiders = true;
+  String? _riderLoadError;
   bool _loading = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRegisteredRiders();
+  }
+
+  Future<void> _loadRegisteredRiders() async {
+    setState(() {
+      _loadingRiders = true;
+      _riderLoadError = null;
+    });
+
+    try {
+      final apiService = context.read<ApiService>();
+      final riders = await apiService.getRegisteredRiders();
+      if (!mounted) return;
+
+      setState(() {
+        _registeredRiders = riders;
+        if (_selectedRiderId != null &&
+            !_registeredRiders.contains(_selectedRiderId)) {
+          _selectedRiderId = null;
+        }
+      });
+    } on ApiException catch (e) {
+      setState(() {
+        _riderLoadError = e.message;
+      });
+    } catch (e) {
+      setState(() {
+        _riderLoadError = e.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingRiders = false;
+        });
+      }
+    }
+  }
 
   Future<void> _login(BuildContext context) async {
     if (_selectedRiderId == null) return;
 
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
 
     try {
       final apiService = context.read<ApiService>();
@@ -52,16 +98,26 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       );
     } on ApiException catch (e) {
-      setState(() { _error = e.message; });
+      setState(() {
+        _error = e.message;
+      });
     } catch (e) {
-      setState(() { _error = 'Login failed: ${e.toString()}'; });
+      setState(() {
+        _error = 'Login failed: ${e.toString()}';
+      });
     } finally {
-      if (mounted) setState(() { _loading = false; });
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final hasRiders = _registeredRiders.isNotEmpty;
+
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -103,16 +159,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
               ),
               const SizedBox(height: 12),
-
-              ..._kDemoRiders.map((rider) => _RiderTile(
-                id: rider['id']!,
-                name: rider['name']!,
-                zone: rider['zone']!,
-                selected: _selectedRiderId == rider['id'],
-                onTap: () => setState(() => _selectedRiderId = rider['id']),
-              )),
-
-              const Spacer(),
+              Expanded(child: _buildRiderSelector()),
 
               if (_error != null)
                 Container(
@@ -124,16 +171,21 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   child: Text(
                     _error!,
-                    style: const TextStyle(color: Color(0xFF991B1B), fontSize: 13),
+                    style:
+                        const TextStyle(color: Color(0xFF991B1B), fontSize: 13),
                   ),
                 ),
 
               FilledButton(
-                onPressed: _selectedRiderId == null || _loading ? null : () => _login(context),
+                onPressed: _selectedRiderId == null || _loading || !hasRiders
+                    ? null
+                    : () => _login(context),
                 child: _loading
                     ? const SizedBox(
-                        width: 20, height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
                       )
                     : const Text('Continue'),
               ),
@@ -149,6 +201,123 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildRiderSelector() {
+    if (_loadingRiders) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_riderLoadError != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline, size: 42, color: Colors.grey),
+            const SizedBox(height: 10),
+            Text(
+              _riderLoadError!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Color(0xFF666666)),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: _loadRegisteredRiders,
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_registeredRiders.isEmpty) {
+      return _buildNoRidersView();
+    }
+
+    return ListView(
+      children: _registeredRiders.map((riderId) {
+        final profile = _kRiderProfiles[riderId];
+        final name = profile?['name'] ?? _labelFromRiderId(riderId);
+        final zone = profile?['zone'] ?? 'Registered rider';
+
+        return _RiderTile(
+          id: riderId,
+          name: name,
+          zone: zone,
+          selected: _selectedRiderId == riderId,
+          onTap: () => setState(() => _selectedRiderId = riderId),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildNoRidersView() {
+    const bootstrapUrl = 'http://127.0.0.1:3000/demo/bootstrap';
+    const sampleBody = '{\n'
+        '  "riderId": "rider_aisha_004",\n'
+        '  "publicKey": { "kty": "EC", "crv": "P-256", "x": "...", "y": "..." },\n'
+        '  "tiers": [1, 2, 3],\n'
+        '  "count": 1,\n'
+        '  "reset": true\n'
+        '}';
+
+    return SingleChildScrollView(
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFBEB),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFFDE68A)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'No riders registered on backend',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Run bootstrap to register a rider and seed demo tasks:',
+              style: TextStyle(color: Color(0xFF444444)),
+            ),
+            const SizedBox(height: 8),
+            const SelectableText(
+              'POST /demo/bootstrap',
+              style: TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
+            const SizedBox(height: 6),
+            const SelectableText(
+              bootstrapUrl,
+              style: TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            const SelectableText(
+              sampleBody,
+              style: TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: _loadRegisteredRiders,
+              child: const Text('Refresh riders'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _labelFromRiderId(String riderId) {
+    final cleaned = riderId.replaceAll('_', ' ').trim();
+    if (cleaned.isEmpty) return riderId;
+
+    final words = cleaned.split(' ');
+    final titleCased = words
+        .map((word) => word.isEmpty
+            ? word
+            : '${word[0].toUpperCase()}${word.substring(1)}')
+        .join(' ');
+    return titleCased;
   }
 }
 
@@ -185,7 +354,8 @@ class _RiderTile extends StatelessWidget {
         child: Row(
           children: [
             CircleAvatar(
-              backgroundColor: selected ? Colors.white24 : const Color(0xFFDDDDDD),
+              backgroundColor:
+                  selected ? Colors.white24 : const Color(0xFFDDDDDD),
               child: Text(
                 name[0],
                 style: TextStyle(
