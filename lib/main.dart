@@ -9,9 +9,12 @@ import 'package:podchain_flutter/podchain_flutter.dart';
 import 'services/api_service.dart';
 import 'screens/login_screen.dart';
 
-// In the demo, the API runs locally. Update this for remote testing.
-// const _kBaseUrl = 'http://10.0.2.2:3000'; // Android emulator → host localhost
-const _kBaseUrl = 'http://127.0.0.1:3000'; // iOS emulator → host localhost
+// In the demo, the API runs locally by default. For Android emulator use:
+// --dart-define=PODCHAIN_API_BASE_URL=http://10.0.2.2:3000
+const _kBaseUrl = String.fromEnvironment(
+  'PODCHAIN_API_BASE_URL',
+  defaultValue: 'http://127.0.0.1:3000',
+);
 
 void main() {
   runApp(const PodChainDemoApp());

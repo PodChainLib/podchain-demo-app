@@ -3,6 +3,7 @@ description: >
   PODCHAIN demonstration mobile application.
   Simulates the delivery agent's experience for protocol evaluation purposes.
 version: 1.0.0+1
+publish_to: none
 
 environment:
   sdk: ">=3.0.0 <4.0.0"

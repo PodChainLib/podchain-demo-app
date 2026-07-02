@@ -11,6 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
@@ -21,6 +22,7 @@ import '../services/api_service.dart';
 enum _DeliveryState {
   idle,
   locating,
+  waitingRecipient,
   signing,
   submitting,
   success,
@@ -41,10 +43,12 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
   _DeliveryState _state = _DeliveryState.idle;
   String? _recipientProof;
   String? _demoOtp;
+  String? _demoQrPayload;
+  String? _tier3DeepLink;
   String? _errorMessage;
   String? _proofId;
   String? _chainHash;
-  bool _offlineQueued = false;
+  int? _chainPosition;
   String? _otpValidationMessage;
 
   final _otpController = TextEditingController();
@@ -59,6 +63,8 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
     _otpController.addListener(_onOtpChanged);
     if (_tier == 2) {
       _loadTier2DemoOtp();
+    } else if (_tier == 3) {
+      _loadTier3DeepLink();
     }
   }
 
@@ -70,20 +76,6 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
   }
 
   // ── Token Collection ────────────────────────────────────────────────────────
-
-  Future<void> _collectToken() async {
-    switch (_tier) {
-      case 1:
-        await _collectTier1Token();
-        break;
-      case 2:
-        // Show OTP entry — user interaction required
-        break;
-      case 3:
-        await _pollForTier3Confirmation();
-        break;
-    }
-  }
 
   Future<void> _collectTier1Token() async {
     final apiService = context.read<ApiService>();
@@ -133,10 +125,12 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
       final apiService = context.read<ApiService>();
       final tokenData = await apiService.getTaskToken(_taskId);
       final otp = tokenData['otp'] as String?;
+      final qrPayload = tokenData['qrPayload'] as String? ?? otp;
       if (!mounted || otp == null || otp.isEmpty) return;
 
       setState(() {
         _demoOtp = otp;
+        _demoQrPayload = qrPayload;
         if (_otpController.text.isEmpty) {
           _otpController.text = otp;
         }
@@ -146,10 +140,34 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
     }
   }
 
+  Future<void> _loadTier3DeepLink() async {
+    try {
+      final apiService = context.read<ApiService>();
+      final tokenData = await apiService.getTaskToken(_taskId);
+      final deepLink = tokenData['deepLink'] as String?;
+      if (!mounted || deepLink == null || deepLink.isEmpty) return;
+
+      setState(() {
+        _tier3DeepLink = deepLink;
+      });
+    } catch (_) {
+      // The polling endpoint will surface a useful error when the rider checks.
+    }
+  }
+
   /// Polls the API until the recipient has completed Tier 3 confirmation.
   /// In production this would be a webhook; for the demo, we poll every 3s.
   Future<void> _pollForTier3Confirmation() async {
     final apiService = context.read<ApiService>();
+
+    final immediate = await apiService.getTaskToken(_taskId);
+    if (immediate['status'] == 'confirmed') {
+      setState(() {
+        _recipientProof = immediate['confirmationJson'] as String?;
+        _errorMessage = null;
+      });
+      return;
+    }
 
     for (int i = 0; i < 20; i++) {
       await Future.delayed(const Duration(seconds: 3));
@@ -157,6 +175,7 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
       if (tokenData['status'] == 'confirmed') {
         setState(() {
           _recipientProof = tokenData['confirmationJson'] as String?;
+          _errorMessage = null;
         });
         return;
       }
@@ -171,14 +190,35 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
   // ── Signing and Submission ──────────────────────────────────────────────────
 
   Future<void> _signAndSubmit() async {
+    if (_tier == 1 && _recipientProof == null) {
+      setState(() {
+        _state = _DeliveryState.submitting;
+        _errorMessage = null;
+      });
+      try {
+        await _collectTier1Token();
+      } catch (e) {
+        setState(() {
+          _state = _DeliveryState.failed;
+          _errorMessage = 'Unable to retrieve passive token: $e';
+        });
+        return;
+      }
+    }
+
     if (_recipientProof == null) return;
 
+    if (!mounted) return;
+
+    final podchain = context.read<AppState>().podchain!;
+    final apiService = context.read<ApiService>();
+
+    // Get GPS coordinates
     setState(() {
       _state = _DeliveryState.locating;
       _errorMessage = null;
     });
 
-    // Get GPS coordinates
     DeliveryCoordinates coordinates;
     try {
       final permission = await Geolocator.checkPermission();
@@ -186,8 +226,10 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
         await Geolocator.requestPermission();
       }
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 10),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
+        ),
       );
       coordinates = DeliveryCoordinates(
         latitude: position.latitude,
@@ -203,11 +245,7 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
       _state = _DeliveryState.signing;
     });
 
-    final podchain = context.read<AppState>().podchain!;
-    final apiService = context.read<ApiService>();
-
     try {
-      // Attempt online submission first
       setState(() {
         _state = _DeliveryState.submitting;
       });
@@ -218,18 +256,15 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
         coordinates: coordinates,
       );
 
-      final success = await apiService.submitProof(proof);
+      final result = await apiService.submitProofResult(proof);
 
-      if (success) {
-        // Retrieve the certificate to display chain details
-        setState(() {
-          _state = _DeliveryState.success;
-          _proofId = proof.taskId;
-        });
-        return;
-      }
-
-      throw Exception('Server rejected the proof');
+      setState(() {
+        _state = _DeliveryState.success;
+        _proofId = result.proofId;
+        _chainHash = result.chainHash;
+        _chainPosition = result.chainPosition;
+      });
+      return;
     } on ApiException catch (e) {
       if (_isNetworkError(e)) {
         // Go offline — sign and queue
@@ -269,7 +304,6 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
       );
       setState(() {
         _state = _DeliveryState.offline;
-        _offlineQueued = true;
       });
     } catch (e) {
       setState(() {
@@ -340,7 +374,7 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: tierColor.withOpacity(0.1),
+                  color: tierColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
@@ -372,6 +406,7 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
       case _DeliveryState.failed:
         return _buildErrorView();
       case _DeliveryState.locating:
+      case _DeliveryState.waitingRecipient:
       case _DeliveryState.signing:
       case _DeliveryState.submitting:
         return _buildLoadingView();
@@ -400,20 +435,20 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
   // ── Tier-specific input views ────────────────────────────────────────────────
 
   Widget _buildTier1View() {
-    return Column(
+    return const Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _StepLabel(step: '1', label: 'Hand over the package'),
-        const SizedBox(height: 12),
-        const Text(
+        _StepLabel(step: '1', label: 'Hand over the package'),
+        SizedBox(height: 12),
+        Text(
           'Verify the recipient\'s identity and hand over the package. '
           'No code is required — the platform token will be retrieved automatically.',
           style: TextStyle(color: Colors.grey, height: 1.5),
         ),
-        const SizedBox(height: 24),
-        const _StepLabel(step: '2', label: 'Tap "Confirm Delivery"'),
-        const SizedBox(height: 12),
-        const Text(
+        SizedBox(height: 24),
+        _StepLabel(step: '2', label: 'Tap "Confirm Delivery"'),
+        SizedBox(height: 12),
+        Text(
           'The app will retrieve the delivery token and sign the proof with your key. '
           'Your GPS coordinates will be recorded at the moment of signing.',
           style: TextStyle(color: Colors.grey, height: 1.5),
@@ -481,15 +516,13 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
               color: const Color(0xFFD1FAE5),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Row(
+            child: const Row(
               children: [
-                const Icon(Icons.check_circle,
-                    color: Color(0xFF065F46), size: 16),
-                const SizedBox(width: 8),
+                Icon(Icons.check_circle, color: Color(0xFF065F46), size: 16),
+                SizedBox(width: 8),
                 Text(
                   'Code accepted — ready to sign',
-                  style:
-                      const TextStyle(color: Color(0xFF065F46), fontSize: 13),
+                  style: TextStyle(color: Color(0xFF065F46), fontSize: 13),
                 ),
               ],
             ),
@@ -510,25 +543,43 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
               color: const Color(0xFFEEF2FF),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.info_outline,
-                    color: Color(0xFF3730A3), size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Demo OTP: $_demoOtp',
-                    style:
-                        const TextStyle(color: Color(0xFF3730A3), fontSize: 13),
+                Row(
+                  children: [
+                    const Icon(Icons.info_outline,
+                        color: Color(0xFF3730A3), size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Demo OTP: $_demoOtp',
+                        style: const TextStyle(
+                          color: Color(0xFF3730A3),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        _otpController.text = _demoOtp!;
+                        _submitOtp();
+                      },
+                      child: const Text('Use'),
+                    ),
+                  ],
+                ),
+                if (_demoQrPayload != null) ...[
+                  const SizedBox(height: 6),
+                  SelectableText(
+                    'QR payload: $_demoQrPayload',
+                    style: const TextStyle(
+                      color: Color(0xFF3730A3),
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                    ),
                   ),
-                ),
-                TextButton(
-                  onPressed: () {
-                    _otpController.text = _demoOtp!;
-                    _submitOtp();
-                  },
-                  child: const Text('Use'),
-                ),
+                ],
               ],
             ),
           ),
@@ -553,16 +604,70 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
           OutlinedButton.icon(
             onPressed: () async {
               setState(() {
-                _state = _DeliveryState.locating;
+                _state = _DeliveryState.waitingRecipient;
+                _errorMessage = null;
               });
               await _pollForTier3Confirmation();
-              setState(() {
-                _state = _DeliveryState.idle;
-              });
+              if (!mounted) return;
+              if (_state == _DeliveryState.waitingRecipient) {
+                setState(() {
+                  _state = _DeliveryState.idle;
+                });
+              }
             },
             icon: const Icon(Icons.refresh, size: 18),
             label: const Text('Check confirmation status'),
           ),
+          if (_tier3DeepLink != null) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEEF2FF),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Recipient signing link',
+                    style: TextStyle(
+                      color: Color(0xFF3730A3),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  SelectableText(
+                    _tier3DeepLink!,
+                    style: const TextStyle(
+                      color: Color(0xFF3730A3),
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: _tier3DeepLink!));
+                      },
+                      icon: const Icon(Icons.copy, size: 16),
+                      label: const Text('Copy link'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (_errorMessage != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _errorMessage!,
+              style: const TextStyle(color: Color(0xFF991B1B), fontSize: 12),
+            ),
+          ],
         ] else ...[
           Container(
             padding: const EdgeInsets.all(12),
@@ -600,10 +705,18 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
             child: MobileScanner(
               onDetect: (capture) {
                 final barcode = capture.barcodes.first;
-                if (barcode.rawValue != null) {
+                final proof = _extractTier2ProofFromQr(barcode.rawValue);
+                if (proof != null) {
                   setState(() {
-                    _recipientProof = barcode.rawValue;
+                    _recipientProof = proof;
+                    _otpController.text = proof;
+                    _otpValidationMessage = null;
                     _showQrScanner = false;
+                  });
+                } else if (barcode.rawValue != null) {
+                  setState(() {
+                    _otpValidationMessage =
+                        'Scanned QR did not contain a valid 6-digit code.';
                   });
                 }
               },
@@ -624,6 +737,8 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
   Widget _buildLoadingView() {
     final messages = {
       _DeliveryState.locating: 'Getting GPS coordinates…',
+      _DeliveryState.waitingRecipient:
+          'Waiting for recipient browser signature…',
       _DeliveryState.signing: 'Signing delivery proof…',
       _DeliveryState.submitting: 'Submitting to platform…',
     };
@@ -662,6 +777,17 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
         if (_chainHash != null) ...[
           const SizedBox(height: 20),
           _HashDisplay(label: 'Chain Hash', value: _chainHash!),
+        ],
+        if (_proofId != null) ...[
+          const SizedBox(height: 10),
+          _HashDisplay(label: 'Proof ID', value: _proofId!),
+        ],
+        if (_chainPosition != null) ...[
+          const SizedBox(height: 10),
+          Text(
+            'Chain position $_chainPosition',
+            style: const TextStyle(color: Colors.grey, fontSize: 13),
+          ),
         ],
         const SizedBox(height: 24),
         FilledButton(
@@ -733,6 +859,7 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
         _state == _DeliveryState.offline ||
         _state == _DeliveryState.failed ||
         _state == _DeliveryState.locating ||
+        _state == _DeliveryState.waitingRecipient ||
         _state == _DeliveryState.signing ||
         _state == _DeliveryState.submitting) {
       return const SizedBox.shrink();
@@ -755,6 +882,21 @@ class _DeliveryScreenState extends State<DeliveryScreen> {
         ),
       ],
     );
+  }
+
+  String? _extractTier2ProofFromQr(String? raw) {
+    if (raw == null) return null;
+
+    final trimmed = raw.trim();
+    if (RegExp(r'^\d{6}$').hasMatch(trimmed)) return trimmed;
+
+    final uri = Uri.tryParse(trimmed);
+    final uriCode = uri?.queryParameters['otp'] ?? uri?.queryParameters['code'];
+    if (uriCode != null && RegExp(r'^\d{6}$').hasMatch(uriCode)) {
+      return uriCode;
+    }
+
+    return null;
   }
 }
 

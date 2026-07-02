@@ -53,7 +53,7 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() {
         _registeredRiders = riders;
         if (_selectedRiderId != null &&
-            !_registeredRiders.contains(_selectedRiderId)) {
+            !_availableRiderIds.contains(_selectedRiderId)) {
           _selectedRiderId = null;
         }
       });
@@ -116,7 +116,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final hasRiders = _registeredRiders.isNotEmpty;
+    final hasRiders = _availableRiderIds.isNotEmpty;
 
     return Scaffold(
       body: SafeArea(
@@ -230,25 +230,38 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     }
 
-    if (_registeredRiders.isEmpty) {
+    final availableRiderIds = _availableRiderIds;
+
+    if (availableRiderIds.isEmpty) {
       return _buildNoRidersView();
     }
 
     return ListView(
-      children: _registeredRiders.map((riderId) {
+      children: availableRiderIds.map((riderId) {
         final profile = _kRiderProfiles[riderId];
         final name = profile?['name'] ?? _labelFromRiderId(riderId);
+        final registered = _registeredRiders.contains(riderId);
         final zone = profile?['zone'] ?? 'Registered rider';
 
         return _RiderTile(
           id: riderId,
           name: name,
           zone: zone,
+          registered: registered,
           selected: _selectedRiderId == riderId,
           onTap: () => setState(() => _selectedRiderId = riderId),
         );
       }).toList(),
     );
+  }
+
+  List<String> get _availableRiderIds {
+    final ids = <String>{
+      ..._kRiderProfiles.keys,
+      ..._registeredRiders,
+    }.toList()
+      ..sort();
+    return ids;
   }
 
   Widget _buildNoRidersView() {
@@ -325,6 +338,7 @@ class _RiderTile extends StatelessWidget {
   final String id;
   final String name;
   final String zone;
+  final bool registered;
   final bool selected;
   final VoidCallback onTap;
 
@@ -332,6 +346,7 @@ class _RiderTile extends StatelessWidget {
     required this.id,
     required this.name,
     required this.zone,
+    required this.registered,
     required this.selected,
     required this.onTap,
   });
@@ -377,7 +392,9 @@ class _RiderTile extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    zone,
+                    registered
+                        ? '$zone · registered'
+                        : '$zone · creates test rider',
                     style: TextStyle(
                       fontSize: 12,
                       color: selected ? Colors.white70 : Colors.grey[600],

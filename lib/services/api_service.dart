@@ -57,6 +57,15 @@ class ApiService {
   /// Returns true on success, false on API-level rejection.
   /// This method is also used as the [SubmitProofCallback] for the offline queue.
   Future<bool> submitProof(SignedDeliveryProof proof) async {
+    await submitProofResult(proof);
+    return true;
+  }
+
+  /// Submits a signed proof and returns the issued Proof Certificate metadata.
+  /// The delivery screen uses this to show the tamper-evident chain result.
+  Future<ProofSubmissionResult> submitProofResult(
+    SignedDeliveryProof proof,
+  ) async {
     try {
       final res = await http.post(
         Uri.parse('$baseUrl/tasks/${proof.taskId}/complete'),
@@ -68,7 +77,10 @@ class ApiService {
         }),
       );
 
-      if (res.statusCode == 200) return true;
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        return ProofSubmissionResult.fromJson(body);
+      }
 
       final body = jsonDecode(res.body) as Map<String, dynamic>;
       final error = body['error'] as String? ?? 'UNKNOWN';
@@ -89,6 +101,35 @@ class ApiService {
         body['message'] as String? ?? 'Request failed: $operation',
       );
     }
+  }
+}
+
+class ProofSubmissionResult {
+  final String proofId;
+  final String taskId;
+  final String chainHash;
+  final int chainPosition;
+  final bool offlineSubmitted;
+  final String issuedAt;
+
+  const ProofSubmissionResult({
+    required this.proofId,
+    required this.taskId,
+    required this.chainHash,
+    required this.chainPosition,
+    required this.offlineSubmitted,
+    required this.issuedAt,
+  });
+
+  factory ProofSubmissionResult.fromJson(Map<String, dynamic> json) {
+    return ProofSubmissionResult(
+      proofId: json['proofId'] as String,
+      taskId: json['taskId'] as String,
+      chainHash: json['chainHash'] as String,
+      chainPosition: json['chainPosition'] as int,
+      offlineSubmitted: json['offlineSubmitted'] as bool? ?? false,
+      issuedAt: json['issuedAt'] as String,
+    );
   }
 }
 
